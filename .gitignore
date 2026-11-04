@@ -6,3 +6,4 @@ venv/
 .vscode/
 .idea/
 .claude/
+sql/script_tabele.sql
