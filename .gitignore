@@ -6,3 +6,5 @@ venv/
 .vscode/
 .idea/
 sql/script_tabele.sql
+PLAN_IMPLEMENTARE.md
+backend.zip

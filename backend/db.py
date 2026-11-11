@@ -1,5 +1,4 @@
 import os
-from contextlib import contextmanager
 from psycopg_pool import ConnectionPool
 from psycopg.rows import dict_row
 from dotenv import load_dotenv
@@ -16,15 +15,11 @@ DB_PORT = os.getenv("DB_PORT", "5432")
 conn_str = f"host={DB_HOST} dbname={DB_NAME} user={DB_USER} password={DB_PASS} port={DB_PORT}"
 
 pool = ConnectionPool(
-    conn_info=conn_str,
+    conninfo=conn_str,
     open=True,
     kwargs={"row_factory": dict_row}
 )
 
-@contextmanager
 def get_db():
-    """
-    Generator care oferă o conexiune din pool și o returnează automat la final.
-    """
     with pool.connection() as conn:
         yield conn
