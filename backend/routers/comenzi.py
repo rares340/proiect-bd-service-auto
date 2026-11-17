@@ -1,85 +1,63 @@
 from fastapi import APIRouter, Depends, HTTPException, status
+
 from db import get_db
-from schemas import ComandaCreate, ComandaResponse
+from schemas import (
+    ComandaCreate, ComandaResponse,
+    PiesaComandaCreate, PiesaComandaResponse,
+)
+from security import require_role
 
 router = APIRouter(prefix="/api/comenzi", tags=["Comenzi"])
 
 
 @router.post("", response_model=ComandaResponse, status_code=status.HTTP_201_CREATED)
-def create_comanda(comanda: ComandaCreate, conn=Depends(get_db)):
+def create_comanda(
+    comanda: ComandaCreate,
+    user: dict = Depends(require_role("OPERATOR")),
+    conn=Depends(get_db),
+):
+    # operatorul este cel logat (CNF4), nu o valoare trimisa de client
+    if user["id_angajat"] is None:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, detail="contul nu are un angajat asociat")
+
     with conn.cursor() as cur:
         cur.execute(
             """
-            INSERT INTO comanda_reparatie (km_intrare, reclamatie, id_vehicul, id_operator, status)
-            VALUES (%s, %s, %s, %s, 'DESCHISA')
-            RETURNING id_comanda, data_intrare, data_predare, km_intrare, status,
-                      reclamatie, id_vehicul, id_operator
+            INSERT INTO comanda_reparatie (km_intrare, reclamatie, id_vehicul, id_operator)
+            VALUES (%s, %s, %s, %s)
+            RETURNING id_comanda
             """,
-            (comanda.km_intrare, comanda.reclamatie, comanda.id_vehicul, comanda.id_operator),
+            (comanda.km_intrare, comanda.reclamatie, comanda.id_vehicul, user["id_angajat"]),
         )
-        new_comanda = cur.fetchone()
+        id_comanda = cur.fetchone()["id_comanda"]
+
+        cur.execute("SELECT * FROM v_comanda_detaliu WHERE id_comanda = %s", (id_comanda,))
+        detaliu = cur.fetchone()
         conn.commit()
-        return new_comanda
+        return detaliu
 
 
-@router.post("/{id_comanda}/piese")
-def add_piesa_to_comanda(id_comanda: int, id_piesa: int, cantitate: int, conn=Depends(get_db)):
-    if cantitate <= 0:
-        raise HTTPException(status_code=400, detail="cantitatea trebuie sa fie mai mare ca 0")
-
+@router.post("/{id_comanda}/piese", response_model=PiesaComandaResponse,
+             dependencies=[Depends(require_role("OPERATOR"))])
+def add_piesa_to_comanda(id_comanda: int, piesa: PiesaComandaCreate, conn=Depends(get_db)):
+    # stocul, pretul si verificarile sunt facute de triggere si de functia SQL
     with conn.cursor() as cur:
         cur.execute(
-            "SELECT stoc_curent, prag_minim, pret_vanzare FROM piesa WHERE id_piesa = %s",
-            (id_piesa,),
+            "SELECT * FROM fn_adauga_piesa_comanda(%s, %s, %s)",
+            (id_comanda, piesa.id_piesa, piesa.cantitate),
         )
-        piesa = cur.fetchone()
-        if not piesa:
-            raise HTTPException(status_code=404, detail="piesa negasita")
+        r = cur.fetchone()
+        conn.commit()
 
-        if piesa["stoc_curent"] < cantitate:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Stoc insuficient! Stoc disponibil: {piesa['stoc_curent']}",
-            )
+    mesaj = None
+    if r["sub_prag"]:
+        mesaj = f"ATENȚIE: piesa '{r['denumire_piesa']}' a ajuns sub pragul minim (stoc: {r['stoc_ramas']})."
 
-        pret_unitar = piesa["pret_vanzare"]
-
-        try:
-            cur.execute(
-                """
-                INSERT INTO piesa_comanda (id_comanda, id_piesa, cantitate, pret_unitar_aplicat)
-                VALUES (%s, %s, %s, %s)
-                ON CONFLICT (id_comanda, id_piesa)
-                DO UPDATE SET cantitate = piesa_comanda.cantitate + EXCLUDED.cantitate
-                """,
-                (id_comanda, id_piesa, cantitate, pret_unitar),
-            )
-
-            cur.execute(
-                """
-                UPDATE piesa
-                SET stoc_curent = stoc_curent - %s
-                WHERE id_piesa = %s
-                RETURNING stoc_curent, prag_minim, denumire
-                """,
-                (cantitate, id_piesa),
-            )
-            updated_piesa = cur.fetchone()
-            conn.commit()
-
-            alerta = None
-            if updated_piesa["stoc_curent"] <= updated_piesa["prag_minim"]:
-                alerta = (
-                    f"ATENȚIE: Piesa '{updated_piesa['denumire']}' a ajuns sub pragul minim "
-                    f"(Stoc: {updated_piesa['stoc_curent']})."
-                )
-
-            return {
-                "message": "Piesa a fost adăugată cu succes la comandă și stocul a fost actualizat.",
-                "stoc_ramas": updated_piesa["stoc_curent"],
-                "alerta": alerta,
-            }
-
-        except Exception as e:
-            conn.rollback()
-            raise HTTPException(status_code=500, detail=str(e))
+    return {
+        "id_comanda": id_comanda,
+        "id_piesa": piesa.id_piesa,
+        "denumire": r["denumire_piesa"],
+        "stoc_ramas": r["stoc_ramas"],
+        "alerta_stoc_minim": r["sub_prag"],
+        "mesaj": mesaj,
+    }

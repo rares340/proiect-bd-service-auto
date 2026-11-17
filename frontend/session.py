@@ -2,10 +2,7 @@ class UserSession:
     _instance = None
 
     def __init__(self):
-        self.id_utilizator = None
-        self.nume_utilizator = None
-        self.rol = None
-        self.id_angajat = None
+        self.clear()
 
     @classmethod
     def get_instance(cls):
@@ -18,12 +15,14 @@ class UserSession:
         self.nume_utilizator = data.get("nume_utilizator")
         self.rol = data.get("rol")
         self.id_angajat = data.get("id_angajat")
+        self.token = data.get("token")
 
     def clear(self):
         self.id_utilizator = None
         self.nume_utilizator = None
         self.rol = None
         self.id_angajat = None
+        self.token = None
 
     def is_logged_in(self) -> bool:
         return self.id_utilizator is not None

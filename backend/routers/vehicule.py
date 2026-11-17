@@ -3,11 +3,13 @@ import psycopg
 from fastapi import APIRouter, Depends, HTTPException, status
 from db import get_db
 from schemas import VehiculCreate, VehiculResponse
+from security import require_role
 
 router = APIRouter(prefix="/api/vehicule", tags=["Vehicule"])
 
 
-@router.get("", response_model=List[VehiculResponse])
+@router.get("", response_model=List[VehiculResponse],
+            dependencies=[Depends(require_role("OPERATOR", "INSPECTOR"))])
 def get_vehicule(
     id_client: Optional[int] = None,
     nr_inmatriculare: Optional[str] = None,
@@ -15,18 +17,19 @@ def get_vehicule(
 ):
     with conn.cursor() as cur:
         if id_client:
-            cur.execute("SELECT * FROM vehicul WHERE id_client = %s", (id_client,))
+            cur.execute("SELECT * FROM vehicul WHERE id_client = %s ORDER BY id_vehicul", (id_client,))
         elif nr_inmatriculare:
             cur.execute(
-                "SELECT * FROM vehicul WHERE nr_inmatriculare ILIKE %s",
+                "SELECT * FROM vehicul WHERE nr_inmatriculare ILIKE %s ORDER BY id_vehicul",
                 (f"%{nr_inmatriculare}%",),
             )
         else:
-            cur.execute("SELECT * FROM vehicul")
+            cur.execute("SELECT * FROM vehicul ORDER BY id_vehicul")
         return cur.fetchall()
 
 
-@router.post("", response_model=VehiculResponse, status_code=status.HTTP_201_CREATED)
+@router.post("", response_model=VehiculResponse, status_code=status.HTTP_201_CREATED,
+             dependencies=[Depends(require_role("OPERATOR"))])
 def create_vehicul(vehicul: VehiculCreate, conn=Depends(get_db)):
     with conn.cursor() as cur:
         try:

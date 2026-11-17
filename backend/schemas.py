@@ -1,6 +1,6 @@
 from pydantic import BaseModel, Field
-from typing import Optional, List
-from datetime import date, datetime
+from typing import Optional
+from datetime import date
 
 class UserLogin(BaseModel):
     nume_utilizator: str
@@ -10,7 +10,10 @@ class UserResponse(BaseModel):
     id_utilizator: int
     nume_utilizator: str
     rol: str
-    id_angajat: Optional[int]
+    id_angajat: Optional[int] = None
+
+class LoginResponse(UserResponse):
+    token: str
 
 class ClientBase(BaseModel):
     nume: str
@@ -30,7 +33,7 @@ class VehiculBase(BaseModel):
     marca: str
     model: str
     motorizare: Optional[str] = None
-    combustibil: str 
+    combustibil: str
     an_fabricatie: int = Field(..., ge=1950, le=2100)
     norma_poluare: Optional[str] = None
 
@@ -50,68 +53,75 @@ class PiesaResponse(BaseModel):
     stoc_curent: int
     prag_minim: int
     id_furnizor: int
-    sub_prag: Optional[bool] = False
 
 class PiesaComandaCreate(BaseModel):
+    # pretul si stocul sunt tratate de baza de date 
     id_piesa: int
     cantitate: int = Field(..., gt=0)
-    pret_unitar_aplicat: Optional[float] = None
 
 class PiesaComandaResponse(BaseModel):
     id_comanda: int
     id_piesa: int
     denumire: Optional[str] = None
-    cantitate: int
-    pret_unitar_aplicat: float
     stoc_ramas: int
     alerta_stoc_minim: bool
+    mesaj: Optional[str] = None
 
-class ComandaBase(BaseModel):
+class ComandaCreate(BaseModel):
+    # id_operator se ia din token
     km_intrare: int = Field(..., ge=0)
     reclamatie: Optional[str] = None
     id_vehicul: int
-    id_operator: int
-
-class ComandaCreate(ComandaBase):
-    pass
 
 class ComandaStatusUpdate(BaseModel):
     status: str = Field(..., pattern="^(DESCHISA|IN_LUCRU|FINALIZATA|PREDATA)$")
     data_predare: Optional[date] = None
 
-class ComandaResponse(ComandaBase):
+class ComandaResponse(BaseModel):
     id_comanda: int
     data_intrare: date
-    data_predare: Optional[date]
+    data_predare: Optional[date] = None
+    km_intrare: int
     status: str
+    reclamatie: Optional[str] = None
+    id_vehicul: int
+    id_operator: int
     nr_inmatriculare: Optional[str] = None
     marca_model: Optional[str] = None
     client_nume: Optional[str] = None
 
 class LucrareEfectuataCreate(BaseModel):
+    # tariful orar il pune triggerul din baza de date
     post_lucru: Optional[str] = None
     ore_lucrate: float = Field(..., ge=0)
-    tarif_orar_aplicat: float = Field(..., ge=0)
     id_mecanic: int
     id_lucrare_catalog: int
 
 class LucrareEfectuataResponse(LucrareEfectuataCreate):
     id_lucrare_efectuata: int
     id_comanda: int
+    tarif_orar_aplicat: float
     denumire_lucrare: Optional[str] = None
     mecanic_nume: Optional[str] = None
 
+
 class InspectieITPCreate(BaseModel):
+    # id_inspector vine din token; data_expirare o calculeaza baza de date
     km: int = Field(..., ge=0)
     emisii_co: Optional[float] = Field(None, ge=0)
     eficienta_franare: Optional[float] = Field(None, ge=0, le=100)
     convergenta: Optional[float] = None
+    rezultat: str = Field(..., pattern="^(ADMIS|RESPINS)$")
     id_vehicul: int
-    id_inspector: int
 
-class InspectieITPResponse(InspectieITPCreate):
+class InspectieITPResponse(BaseModel):
     id_inspectie: int
     data_inspectie: date
+    km: int
+    emisii_co: Optional[float] = None
+    eficienta_franare: Optional[float] = None
+    convergenta: Optional[float] = None
     rezultat: str
-    data_expirare: Optional[date]
-    mesaj: Optional[str] = None
+    data_expirare: Optional[date] = None
+    id_vehicul: int
+    id_inspector: int
