@@ -3,7 +3,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from routers import auth, clienti, vehicule, comenzi, itp
+from routers import auth, clienti, vehicule, comenzi, itp, admin, referinte
 
 app = FastAPI(
     title="Service Auto & ITP API",
@@ -20,8 +20,6 @@ app.add_middleware(
 )
 
 
-# Erorile din baza de date devin raspunsuri HTTP
-# cu mesajul din SQL, ca sa ajunga in interfata.
 def _mesaj(exc: Exception) -> str:
     diag = getattr(exc, "diag", None)
     if diag is not None and diag.message_primary:
@@ -62,7 +60,8 @@ app.include_router(clienti.router)
 app.include_router(vehicule.router)
 app.include_router(comenzi.router)
 app.include_router(itp.router)
-
+app.include_router(admin.router)
+app.include_router(referinte.router)
 
 @app.get("/")
 def read_root():

@@ -55,7 +55,7 @@ class PiesaResponse(BaseModel):
     id_furnizor: int
 
 class PiesaComandaCreate(BaseModel):
-    # pretul si stocul sunt tratate de baza de date 
+    # pretul si stocul sunt tratate de baza de date (triggere)
     id_piesa: int
     cantitate: int = Field(..., gt=0)
 
@@ -68,7 +68,7 @@ class PiesaComandaResponse(BaseModel):
     mesaj: Optional[str] = None
 
 class ComandaCreate(BaseModel):
-    # id_operator se ia din token
+    # id_operator NU mai vine din client: se ia din token
     km_intrare: int = Field(..., ge=0)
     reclamatie: Optional[str] = None
     id_vehicul: int
@@ -104,7 +104,6 @@ class LucrareEfectuataResponse(LucrareEfectuataCreate):
     denumire_lucrare: Optional[str] = None
     mecanic_nume: Optional[str] = None
 
-
 class InspectieITPCreate(BaseModel):
     # id_inspector vine din token; data_expirare o calculeaza baza de date
     km: int = Field(..., ge=0)
@@ -125,3 +124,55 @@ class InspectieITPResponse(BaseModel):
     data_expirare: Optional[date] = None
     id_vehicul: int
     id_inspector: int
+
+from datetime import datetime  
+
+
+class UtilizatorCreate(BaseModel):
+    nume_utilizator: str = Field(..., min_length=3, max_length=50)
+    parola: str = Field(..., min_length=6, max_length=72)
+    rol: str = Field(..., pattern="^(ADMINISTRATOR|OPERATOR|INSPECTOR)$")
+    id_angajat: Optional[int] = None
+
+
+class UtilizatorAdminResponse(BaseModel):
+    id_utilizator: int
+    nume_utilizator: str
+    rol: str
+    activ: bool
+    data_creare: datetime
+    id_angajat: Optional[int] = None
+    angajat_nume: Optional[str] = None
+
+
+class ActivUpdate(BaseModel):
+    activ: bool
+
+
+class ParolaUpdate(BaseModel):
+    parola: str = Field(..., min_length=6, max_length=72)
+
+
+class AngajatCreate(BaseModel):
+    nume: str = Field(..., min_length=2, max_length=100)
+    functie: str = Field(..., pattern="^(MECANIC|OPERATOR|INSPECTOR)$")
+    tarif_orar: Optional[float] = Field(None, ge=0)
+
+
+class AngajatResponse(BaseModel):
+    id_angajat: int
+    nume: str
+    functie: str
+    tarif_orar: Optional[float] = None
+
+
+class StatisticaAngajat(BaseModel):
+    id_angajat: int
+    nume: str
+    functie: str
+    nr_comenzi_deschise: int      # operatori
+    nr_comenzi_lucrate: int       # mecanici
+    ore_lucrate: float            # mecanici
+    venit_manopera: float         # mecanici
+    nr_inspectii: int             # inspectori
+    nr_respinse: int              # inspectori

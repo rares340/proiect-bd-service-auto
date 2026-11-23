@@ -1,16 +1,34 @@
-import os
 import sys
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QDate
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QLineEdit, QPushButton, QTabWidget, QTableWidget,
-    QTableWidgetItem, QMessageBox, QFormLayout, QComboBox, QTextEdit, QHeaderView
+    QTableWidgetItem, QMessageBox, QFormLayout, QComboBox, QTextEdit, QHeaderView,
+    QInputDialog, QDateEdit, QAbstractItemView
 )
 
 import api
 from api import ApiError
 from session import UserSession
+
+
+def umple_tabel(table, randuri):
+    """Afiseaza o lista de randuri (liste de valori) intr-un QTableWidget."""
+    table.setRowCount(len(randuri))
+    for r, rand in enumerate(randuri):
+        for c, val in enumerate(rand):
+            table.setItem(r, c, QTableWidgetItem("" if val is None else str(val)))
+
+
+def tabel_simplu(coloane):
+    table = QTableWidget()
+    table.setColumnCount(len(coloane))
+    table.setHorizontalHeaderLabels(coloane)
+    table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+    table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+    table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+    return table
 
 
 class LoginWindow(QWidget):
@@ -68,8 +86,9 @@ class LoginWindow(QWidget):
 
 
 class MainWindow(QMainWindow):
-    def __init__(self):
+    def __init__(self, on_logout):
         super().__init__()
+        self.on_logout = on_logout
         self.session = UserSession.get_instance()
         self.init_ui()
 
@@ -89,7 +108,8 @@ class MainWindow(QMainWindow):
         header_layout.addStretch()
         header_layout.addWidget(logout_btn)
         main_layout.addLayout(header_layout)
-        
+
+        # Tab-urile depind de rol (CNF1): ce nu ai voie sa faci nu apare.
         self.tabs = QTabWidget()
         rol = self.session.rol
         if rol == "OPERATOR":
@@ -99,9 +119,8 @@ class MainWindow(QMainWindow):
         elif rol == "INSPECTOR":
             self.tabs.addTab(ItpTab(), "Statie ITP")
         else:  # ADMINISTRATOR
-            placeholder = QLabel("Administrare utilizatori - urmeaza")
-            placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            self.tabs.addTab(placeholder, "Utilizatori")
+            self.tabs.addTab(UtilizatoriTab(), "Utilizatori")
+            self.tabs.addTab(AngajatiTab(), "Angajati & Statistici")
 
         main_layout.addWidget(self.tabs)
         central_widget.setLayout(main_layout)
@@ -109,9 +128,10 @@ class MainWindow(QMainWindow):
 
     def logout(self):
         self.session.clear()
+        # Deschidem login-ul INAINTE de a inchide aceasta fereastra, ca aplicatia
+        # sa nu se opreasca (Qt iese cand se inchide ultima fereastra).
+        self.on_logout()
         self.close()
-        python = sys.executable
-        os.execl(python, python, *sys.argv)
 
 
 class ClientiTab(QWidget):
@@ -184,51 +204,314 @@ class ClientiTab(QWidget):
         self.load_clienti()
 
 
+STATUS_URMATOR = {"DESCHISA": "IN_LUCRU", "IN_LUCRU": "FINALIZATA", "FINALIZATA": "PREDATA"}
+
+
+def lei(valoare):
+    return f"{float(valoare or 0):.2f}"
+
+
 class ComenziTab(QWidget):
     def __init__(self):
         super().__init__()
         layout = QVBoxLayout()
-        layout.addWidget(QLabel("<b>Gestionare Comenzi & Piese</b><br>Se deschid comenzi si se adauga piese din stoc"))
 
-        form = QFormLayout()
-        self.vehicul_id_in = QLineEdit()
-        self.vehicul_id_in.setPlaceholderText("ID Vehicul")
+        # ---- comanda noua
+        noua = QHBoxLayout()
+        self.vehicul_in = QComboBox()
+        self.vehicul_in.setEditable(True)
+        self.vehicul_in.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+        self.vehicul_in.setMinimumWidth(240)
+        self.vehicul_in.lineEdit().setPlaceholderText("Vehicul (scrieti nr. inmatriculare)")
         self.km_in = QLineEdit()
-        self.km_in.setPlaceholderText("Kilometraj")
-        self.reclamatie_in = QTextEdit()
-        self.reclamatie_in.setMaximumHeight(60)
+        self.km_in.setPlaceholderText("Km intrare")
+        self.reclamatie_in = QLineEdit()
+        self.reclamatie_in.setPlaceholderText("Reclamatie")
+        deschide_btn = QPushButton("Deschide comanda")
+        deschide_btn.setStyleSheet("background-color: #2b5797; color: white; font-weight: bold;")
+        deschide_btn.clicked.connect(self.creeaza_comanda)
+        noua.addWidget(self.vehicul_in)
+        noua.addWidget(self.km_in)
+        noua.addWidget(self.reclamatie_in, 1)
+        noua.addWidget(deschide_btn)
+        layout.addLayout(noua)
 
-        form.addRow("ID Vehicul:", self.vehicul_id_in)
-        form.addRow("Km Intrare:", self.km_in)
-        form.addRow("Reclamatie:", self.reclamatie_in)
+        # ---- lista comenzilor
+        filtru = QHBoxLayout()
+        filtru.addWidget(QLabel("Status:"))
+        self.filtru_in = QComboBox()
+        self.filtru_in.addItems(["Toate", "DESCHISA", "IN_LUCRU", "FINALIZATA", "PREDATA"])
+        self.filtru_in.currentTextChanged.connect(lambda _: self.incarca_comenzi())
+        reincarca_btn = QPushButton("Reincarca")
+        reincarca_btn.clicked.connect(self.reincarca_tot)
+        filtru.addWidget(self.filtru_in)
+        filtru.addWidget(reincarca_btn)
+        filtru.addStretch()
+        layout.addLayout(filtru)
 
-        btn = QPushButton("Deschide comanda noua")
-        btn.setStyleSheet("background-color: #2b5797; color: white; font-weight: bold;")
-        btn.clicked.connect(self.creeaza_comanda)
+        self.table = tabel_simplu(["ID", "Nr. inmatriculare", "Vehicul", "Client", "Status", "Data intrare", "Km"])
+        self.table.itemSelectionChanged.connect(self.arata_detalii)
+        layout.addWidget(self.table, 2)
 
-        layout.addLayout(form)
-        layout.addWidget(btn)
-        layout.addStretch()
+        # ---- detalii comanda selectata
+        self.detalii = QTextEdit()
+        self.detalii.setReadOnly(True)
+        layout.addWidget(self.detalii, 2)
+
+        # ---- actiuni asupra comenzii selectate
+        lucrare_rand = QHBoxLayout()
+        self.mecanic_in = QComboBox()
+        self.lucrare_in = QComboBox()
+        self.ore_in = QLineEdit()
+        self.ore_in.setPlaceholderText("Ore")
+        self.ore_in.setMaximumWidth(70)
+        lucrare_btn = QPushButton("Adauga lucrare")
+        lucrare_btn.clicked.connect(self.adauga_lucrare)
+        lucrare_rand.addWidget(self.mecanic_in)
+        lucrare_rand.addWidget(self.lucrare_in, 1)
+        lucrare_rand.addWidget(self.ore_in)
+        lucrare_rand.addWidget(lucrare_btn)
+        layout.addLayout(lucrare_rand)
+
+        piesa_rand = QHBoxLayout()
+        self.piesa_in = QComboBox()
+        self.cant_in = QLineEdit()
+        self.cant_in.setPlaceholderText("Cant.")
+        self.cant_in.setMaximumWidth(70)
+        piesa_btn = QPushButton("Adauga piesa")
+        piesa_btn.clicked.connect(self.adauga_piesa)
+        status_btn = QPushButton("Avanseaza status")
+        status_btn.setStyleSheet("background-color: #008a00; color: white; font-weight: bold;")
+        status_btn.clicked.connect(self.avanseaza_status)
+        piesa_rand.addWidget(self.piesa_in, 1)
+        piesa_rand.addWidget(self.cant_in)
+        piesa_rand.addWidget(piesa_btn)
+        piesa_rand.addSpacing(20)
+        piesa_rand.addWidget(status_btn)
+        layout.addLayout(piesa_rand)
+
         self.setLayout(layout)
+        self.incarca_referinte()
+        self.incarca_comenzi()
 
-    def creeaza_comanda(self):
+    # ------------------------------------------------------------ incarcari
+    def incarca_referinte(self):
         try:
-            payload = {
-                "km_intrare": int(self.km_in.text().strip()),
-                "reclamatie": self.reclamatie_in.toPlainText().strip() or None,
-                "id_vehicul": int(self.vehicul_id_in.text().strip()),
-            }
-        except ValueError:
-            QMessageBox.warning(self, "Eroare", "ID vehicul si km trebuie sa fie numere intregi")
+            vehicule = api.get("/vehicule")
+            mecanici = api.get("/mecanici")
+            lucrari = api.get("/lucrari-catalog")
+        except ApiError as e:
+            QMessageBox.warning(self, "Eroare", str(e))
             return
 
+        self.vehicul_in.clear()
+        for v in vehicule:
+            self.vehicul_in.addItem(f"{v['nr_inmatriculare']} - {v['marca']} {v['model']}", v["id_vehicul"])
+        self.vehicul_in.setCurrentIndex(-1)
+
+        self.mecanic_in.clear()
+        for m in mecanici:
+            self.mecanic_in.addItem(m["nume"], m["id_angajat"])
+
+        self.lucrare_in.clear()
+        for l in lucrari:
+            self.lucrare_in.addItem(f"{l['denumire']} ({l['durata_ore']} h)", l["id_lucrare_catalog"])
+
+        self.incarca_piese()
+
+    def incarca_piese(self):
+        try:
+            piese = api.get("/piese")
+        except ApiError as e:
+            QMessageBox.warning(self, "Eroare", str(e))
+            return
+        self.piesa_in.clear()
+        for p in piese:
+            self.piesa_in.addItem(
+                f"{p['cod']} - {p['denumire']} (stoc: {p['stoc_curent']}, {lei(p['pret_vanzare'])} lei)",
+                p["id_piesa"])
+
+    def incarca_comenzi(self, pastreaza=None):
+        filtru = self.filtru_in.currentText()
+        params = {} if filtru == "Toate" else {"status": filtru}
+        try:
+            comenzi = api.get("/comenzi", params=params)
+        except ApiError as e:
+            QMessageBox.warning(self, "Eroare", str(e))
+            return
+
+        self.table.blockSignals(True)
+        umple_tabel(self.table, [
+            [c["id_comanda"], c["nr_inmatriculare"], c["marca_model"], c["client_nume"],
+             c["status"], c["data_intrare"], c["km_intrare"]]
+            for c in comenzi
+        ])
+        rand = None
+        if pastreaza is not None:
+            for r in range(self.table.rowCount()):
+                if self.table.item(r, 0).text() == str(pastreaza):
+                    rand = r
+                    break
+        if rand is None:
+            self.table.clearSelection()
+        else:
+            self.table.selectRow(rand)
+        self.table.blockSignals(False)
+        self.arata_detalii()
+
+    def reincarca_tot(self):
+        self.incarca_referinte()
+        self.incarca_comenzi(self._id_selectat())
+
+    # -------------------------------------------------------------- detalii
+    def _id_selectat(self):
+        randuri = self.table.selectionModel().selectedRows()
+        if not randuri:
+            return None
+        return int(self.table.item(randuri[0].row(), 0).text())
+
+    def _status_selectat(self):
+        randuri = self.table.selectionModel().selectedRows()
+        return self.table.item(randuri[0].row(), 4).text() if randuri else None
+
+    def arata_detalii(self):
+        id_comanda = self._id_selectat()
+        if id_comanda is None:
+            self.detalii.clear()
+            return
+        try:
+            d = api.get(f"/comenzi/{id_comanda}")
+        except ApiError as e:
+            self.detalii.setText(str(e))
+            return
+
+        c = d["comanda"]
+        linii = [
+            f"COMANDA #{c['id_comanda']} - {c['status']}",
+            f"Vehicul: {c['nr_inmatriculare']} ({c['marca_model']})",
+            f"Client: {c['client_nume']}, tel. {c['client_telefon']}",
+            f"Intrare: {c['data_intrare']}, {c['km_intrare']} km, operator {c['operator_nume']}",
+            f"Reclamatie: {c['reclamatie'] or '-'}",
+            "",
+            "LUCRARI",
+        ]
+        if d["lucrari"]:
+            for l in d["lucrari"]:
+                linii.append(f"  {l['lucrare']} - {l['mecanic']}: {l['ore_lucrate']} h x "
+                             f"{lei(l['tarif_orar_aplicat'])} = {lei(l['valoare'])} lei")
+        else:
+            linii.append("  (nicio lucrare)")
+
+        linii += ["", "PIESE"]
+        if d["piese"]:
+            for p in d["piese"]:
+                linii.append(f"  {p['denumire']} ({p['cod']}): {p['cantitate']} x "
+                             f"{lei(p['pret_unitar_aplicat'])} = {lei(p['valoare'])} lei")
+        else:
+            linii.append("  (nicio piesa)")
+
+        dv = d["deviz"]
+        linii += ["", "DEVIZ",
+                  f"  Manopera: {lei(dv['manopera'])} lei",
+                  f"  Piese:    {lei(dv['piese'])} lei",
+                  f"  TOTAL:    {lei(dv['total'])} lei"]
+        self.detalii.setText("\n".join(linii))
+
+    # -------------------------------------------------------------- actiuni
+    def creeaza_comanda(self):
+        idx = self.vehicul_in.findText(self.vehicul_in.currentText(), Qt.MatchFlag.MatchFixedString)
+        if idx < 0:
+            QMessageBox.warning(self, "Atentie", "Alegeti un vehicul din lista")
+            return
+        try:
+            km = int(self.km_in.text().strip())
+        except ValueError:
+            QMessageBox.warning(self, "Atentie", "Kilometrajul trebuie sa fie un numar intreg")
+            return
+
+        payload = {
+            "km_intrare": km,
+            "reclamatie": self.reclamatie_in.text().strip() or None,
+            "id_vehicul": self.vehicul_in.itemData(idx),
+        }
         try:
             data = api.post("/comenzi", json=payload)
         except ApiError as e:
             QMessageBox.critical(self, "Eroare", str(e))
             return
 
-        QMessageBox.information(self, "Succes", f"Comanda deschisa cu ID-ul: {data['id_comanda']}")
+        self.km_in.clear()
+        self.reclamatie_in.clear()
+        self.vehicul_in.setCurrentIndex(-1)
+        self.incarca_comenzi(data["id_comanda"])
+
+    def _comanda_sau_avertisment(self):
+        id_comanda = self._id_selectat()
+        if id_comanda is None:
+            QMessageBox.warning(self, "Atentie", "Selectati o comanda din tabel")
+        return id_comanda
+
+    def adauga_lucrare(self):
+        id_comanda = self._comanda_sau_avertisment()
+        if id_comanda is None:
+            return
+        try:
+            ore = float(self.ore_in.text().strip().replace(",", "."))
+        except ValueError:
+            QMessageBox.warning(self, "Atentie", "Orele trebuie sa fie un numar")
+            return
+
+        payload = {
+            "post_lucru": None,
+            "ore_lucrate": ore,
+            "id_mecanic": self.mecanic_in.currentData(),
+            "id_lucrare_catalog": self.lucrare_in.currentData(),
+        }
+        try:
+            api.post(f"/comenzi/{id_comanda}/lucrari", json=payload)
+        except ApiError as e:
+            QMessageBox.critical(self, "Eroare", str(e))
+            return
+        self.ore_in.clear()
+        self.arata_detalii()
+
+    def adauga_piesa(self):
+        id_comanda = self._comanda_sau_avertisment()
+        if id_comanda is None:
+            return
+        try:
+            cantitate = int(self.cant_in.text().strip())
+        except ValueError:
+            QMessageBox.warning(self, "Atentie", "Cantitatea trebuie sa fie un numar intreg")
+            return
+
+        try:
+            r = api.post(f"/comenzi/{id_comanda}/piese",
+                         json={"id_piesa": self.piesa_in.currentData(), "cantitate": cantitate})
+        except ApiError as e:
+            QMessageBox.critical(self, "Eroare", str(e))
+            return
+
+        self.cant_in.clear()
+        self.incarca_piese()      # stocul s-a schimbat
+        self.arata_detalii()
+        if r.get("mesaj"):
+            QMessageBox.warning(self, "Stoc minim", r["mesaj"])
+
+    def avanseaza_status(self):
+        id_comanda = self._comanda_sau_avertisment()
+        if id_comanda is None:
+            return
+        urmator = STATUS_URMATOR.get(self._status_selectat())
+        if urmator is None:
+            QMessageBox.information(self, "Info", "Comanda a fost deja predata")
+            return
+        try:
+            api.put(f"/comenzi/{id_comanda}/status", json={"status": urmator})
+        except ApiError as e:
+            QMessageBox.critical(self, "Eroare", str(e))
+            return
+        self.incarca_comenzi(id_comanda)
 
 
 class ItpTab(QWidget):
@@ -340,18 +623,231 @@ class AiTab(QWidget):
         )
 
 
+class UtilizatoriTab(QWidget):
+    def __init__(self):
+        super().__init__()
+        layout = QVBoxLayout()
+
+        form = QHBoxLayout()
+        self.nume_in = QLineEdit()
+        self.nume_in.setPlaceholderText("Utilizator")
+        self.parola_in = QLineEdit()
+        self.parola_in.setPlaceholderText("Parola (min. 6)")
+        self.parola_in.setEchoMode(QLineEdit.EchoMode.Password)
+        self.rol_in = QComboBox()
+        self.rol_in.addItems(["OPERATOR", "INSPECTOR", "ADMINISTRATOR"])
+        self.angajat_in = QComboBox()
+        self.rol_in.currentTextChanged.connect(self.incarca_angajati)
+        add_btn = QPushButton("Creeaza cont")
+        add_btn.clicked.connect(self.creeaza)
+
+        for w in (self.nume_in, self.parola_in, self.rol_in, self.angajat_in, add_btn):
+            form.addWidget(w)
+        layout.addLayout(form)
+
+        self.table = tabel_simplu(["ID", "Utilizator", "Rol", "Angajat", "Activ"])
+        layout.addWidget(self.table)
+
+        butoane = QHBoxLayout()
+        toggle_btn = QPushButton("Activeaza / Dezactiveaza")
+        toggle_btn.clicked.connect(self.schimba_activ)
+        reset_btn = QPushButton("Reseteaza parola")
+        reset_btn.clicked.connect(self.reseteaza_parola)
+        butoane.addWidget(toggle_btn)
+        butoane.addWidget(reset_btn)
+        butoane.addStretch()
+        layout.addLayout(butoane)
+
+        self.setLayout(layout)
+        self.incarca_angajati(self.rol_in.currentText())
+        self.incarca_utilizatori()
+
+    def incarca_angajati(self, rol):
+        """Combo-ul arata doar angajatii cu functia potrivita si fara cont."""
+        self.angajat_in.clear()
+        if rol == "ADMINISTRATOR":
+            self.angajat_in.addItem("- fara angajat -", None)
+            self.angajat_in.setEnabled(False)
+            return
+        self.angajat_in.setEnabled(True)
+        try:
+            lista = api.get("/admin/angajati", params={"functie": rol, "fara_cont": "true"})
+        except ApiError as e:
+            QMessageBox.warning(self, "Eroare", str(e))
+            return
+        for a in lista:
+            self.angajat_in.addItem(a["nume"], a["id_angajat"])
+
+    def incarca_utilizatori(self):
+        try:
+            lista = api.get("/admin/utilizatori")
+        except ApiError as e:
+            QMessageBox.warning(self, "Eroare", str(e))
+            return
+        umple_tabel(self.table, [
+            [u["id_utilizator"], u["nume_utilizator"], u["rol"],
+             u["angajat_nume"] or "-", "Da" if u["activ"] else "Nu"]
+            for u in lista
+        ])
+
+    def _selectat(self):
+        row = self.table.currentRow()
+        if row < 0:
+            QMessageBox.warning(self, "Atentie", "Selectati un utilizator din tabel")
+            return None
+        return int(self.table.item(row, 0).text()), self.table.item(row, 4).text() == "Da"
+
+    def creeaza(self):
+        payload = {
+            "nume_utilizator": self.nume_in.text().strip(),
+            "parola": self.parola_in.text(),
+            "rol": self.rol_in.currentText(),
+            "id_angajat": self.angajat_in.currentData(),
+        }
+        try:
+            api.post("/admin/utilizatori", json=payload)
+        except ApiError as e:
+            QMessageBox.critical(self, "Eroare", str(e))
+            return
+        self.nume_in.clear()
+        self.parola_in.clear()
+        self.incarca_angajati(self.rol_in.currentText())
+        self.incarca_utilizatori()
+
+    def schimba_activ(self):
+        sel = self._selectat()
+        if not sel:
+            return
+        id_utilizator, activ = sel
+        try:
+            api.put(f"/admin/utilizatori/{id_utilizator}/activ", json={"activ": not activ})
+        except ApiError as e:
+            QMessageBox.critical(self, "Eroare", str(e))
+            return
+        self.incarca_utilizatori()
+
+    def reseteaza_parola(self):
+        sel = self._selectat()
+        if not sel:
+            return
+        parola, ok = QInputDialog.getText(
+            self, "Resetare parola", "Parola noua (min. 6 caractere):", QLineEdit.EchoMode.Password)
+        if not ok:
+            return
+        try:
+            api.put(f"/admin/utilizatori/{sel[0]}/parola", json={"parola": parola})
+        except ApiError as e:
+            QMessageBox.critical(self, "Eroare", str(e))
+            return
+        QMessageBox.information(self, "Succes", "Parola a fost schimbata")
+
+
+class AngajatiTab(QWidget):
+    def __init__(self):
+        super().__init__()
+        layout = QVBoxLayout()
+
+        form = QHBoxLayout()
+        self.nume_in = QLineEdit()
+        self.nume_in.setPlaceholderText("Nume angajat")
+        self.functie_in = QComboBox()
+        self.functie_in.addItems(["MECANIC", "OPERATOR", "INSPECTOR"])
+        self.tarif_in = QLineEdit()
+        self.tarif_in.setPlaceholderText("Tarif orar (doar mecanici)")
+        add_btn = QPushButton("Adauga angajat")
+        add_btn.clicked.connect(self.adauga)
+        for w in (self.nume_in, self.functie_in, self.tarif_in, add_btn):
+            form.addWidget(w)
+        layout.addLayout(form)
+
+        self.table = tabel_simplu(["ID", "Nume", "Functie", "Tarif orar"])
+        layout.addWidget(self.table)
+
+        layout.addWidget(QLabel("<b>Statistici activitate</b>"))
+        perioada = QHBoxLayout()
+        self.start_in = QDateEdit(QDate.currentDate().addDays(-30))
+        self.end_in = QDateEdit(QDate.currentDate())
+        for d in (self.start_in, self.end_in):
+            d.setCalendarPopup(True)
+            d.setDisplayFormat("yyyy-MM-dd")
+        stat_btn = QPushButton("Afiseaza statistici")
+        stat_btn.clicked.connect(self.incarca_statistici)
+        perioada.addWidget(QLabel("De la:"))
+        perioada.addWidget(self.start_in)
+        perioada.addWidget(QLabel("Pana la:"))
+        perioada.addWidget(self.end_in)
+        perioada.addWidget(stat_btn)
+        perioada.addStretch()
+        layout.addLayout(perioada)
+
+        self.stat_table = tabel_simplu([
+            "Nume", "Functie", "Comenzi deschise", "Comenzi lucrate",
+            "Ore lucrate", "Venit manopera", "Inspectii", "Respinse"])
+        layout.addWidget(self.stat_table)
+
+        self.setLayout(layout)
+        self.incarca_angajati()
+        self.incarca_statistici()
+
+    def incarca_angajati(self):
+        try:
+            lista = api.get("/admin/angajati")
+        except ApiError as e:
+            QMessageBox.warning(self, "Eroare", str(e))
+            return
+        umple_tabel(self.table, [[a["id_angajat"], a["nume"], a["functie"], a["tarif_orar"]] for a in lista])
+
+    def adauga(self):
+        tarif_text = self.tarif_in.text().strip()
+        try:
+            tarif = float(tarif_text) if tarif_text else None
+        except ValueError:
+            QMessageBox.warning(self, "Eroare", "Tariful trebuie sa fie un numar")
+            return
+        payload = {"nume": self.nume_in.text().strip(),
+                   "functie": self.functie_in.currentText(),
+                   "tarif_orar": tarif}
+        try:
+            api.post("/admin/angajati", json=payload)
+        except ApiError as e:
+            QMessageBox.critical(self, "Eroare", str(e))
+            return
+        self.nume_in.clear()
+        self.tarif_in.clear()
+        self.incarca_angajati()
+        self.incarca_statistici()
+
+    def incarca_statistici(self):
+        params = {"start": self.start_in.date().toString(Qt.DateFormat.ISODate),
+                  "end": self.end_in.date().toString(Qt.DateFormat.ISODate)}
+        try:
+            lista = api.get("/admin/statistici", params=params)
+        except ApiError as e:
+            QMessageBox.warning(self, "Eroare", str(e))
+            return
+        umple_tabel(self.stat_table, [
+            [s["nume"], s["functie"], s["nr_comenzi_deschise"], s["nr_comenzi_lucrate"],
+             s["ore_lucrate"], s["venit_manopera"], s["nr_inspectii"], s["nr_respinse"]]
+            for s in lista
+        ])
+
+
 def main():
     app = QApplication(sys.argv)
+    ferestre = {}  # pastram referintele, altfel Python le sterge din memorie
+
+    def show_login():
+        login = LoginWindow(show_main)
+        ferestre["login"] = login
+        login.show()
 
     def show_main():
-        global main_win
-        main_win = MainWindow()
-        main_win.show()
-        login_win.close()
+        principala = MainWindow(on_logout=show_login)
+        ferestre["principala"] = principala
+        principala.show()
+        ferestre["login"].close()
 
-    login_win = LoginWindow(show_main)
-    login_win.show()
-
+    show_login()
     sys.exit(app.exec())
 
 
