@@ -176,3 +176,43 @@ class StatisticaAngajat(BaseModel):
     venit_manopera: float         # mecanici
     nr_inspectii: int             # inspectori
     nr_respinse: int              # inspectori
+
+class ProgramareCreate(BaseModel):
+    data_programare: datetime
+    durata_estimata_ore: float = Field(..., gt=0, le=24)
+    descriere_problema: Optional[str] = None
+    id_vehicul: int
+    id_lucrare_catalog: int
+
+
+class ProgramareStatusUpdate(BaseModel):
+    status: str = Field(..., pattern="^(ANULATA|NEPREZENTAT)$")
+
+
+class ProgramareComanda(BaseModel):
+    km_intrare: int = Field(..., ge=0)
+
+# -------------------------------------------------- Piese, furnizori, catalog
+class PiesaCreate(BaseModel):
+    cod: str = Field(..., min_length=1, max_length=30)
+    denumire: str = Field(..., min_length=2, max_length=100)
+    categorie: str = Field(..., min_length=2, max_length=30)
+    pret_vanzare: float = Field(..., ge=0)
+    stoc_curent: int = Field(0, ge=0)
+    prag_minim: int = Field(0, ge=0)
+    id_furnizor: int
+
+
+class StocUpdate(BaseModel):
+    cantitate: int = Field(..., gt=0)
+
+
+class FurnizorCreate(BaseModel):
+    denumire: str = Field(..., min_length=2, max_length=100)
+    cui: str = Field(..., min_length=2, max_length=12)
+    telefon: Optional[str] = Field(None, max_length=15)
+
+
+class CatalogCreate(BaseModel):
+    denumire: str = Field(..., min_length=2, max_length=100)
+    durata_ore: float = Field(..., gt=0, lt=100)

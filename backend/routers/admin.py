@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from db import get_db
 from schemas import (
     UtilizatorCreate, UtilizatorAdminResponse, ActivUpdate, ParolaUpdate,
-    AngajatCreate, AngajatResponse, StatisticaAngajat,
+    AngajatCreate, AngajatResponse, StatisticaAngajat, CatalogCreate,
 )
 from security import SESSIONS, hash_parola, require_role
 
@@ -142,6 +142,7 @@ def create_angajat(data: AngajatCreate, conn=Depends(get_db)):
         return nou
 
 
+# -------------------------------------------------------------- Statistici
 @router.get("/statistici", response_model=List[StatisticaAngajat])
 def statistici_angajati(start: date, end: date, conn=Depends(get_db)):
     """Activitatea fiecarui angajat in perioada [start, end]."""
@@ -191,3 +192,29 @@ def statistici_angajati(start: date, end: date, conn=Depends(get_db)):
             {"start": start, "end": end},
         )
         return cur.fetchall()
+
+
+# ---------------------------------------------------------------- Catalog
+@router.get("/catalog")
+def get_catalog(conn=Depends(get_db)):
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT id_lucrare_catalog, denumire, durata_ore FROM lucrare_catalog ORDER BY denumire"
+        )
+        return cur.fetchall()
+
+
+@router.post("/catalog", status_code=status.HTTP_201_CREATED)
+def create_lucrare_catalog(data: CatalogCreate, conn=Depends(get_db)):
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO lucrare_catalog (denumire, durata_ore)
+            VALUES (%s, %s)
+            RETURNING id_lucrare_catalog, denumire, durata_ore
+            """,
+            (data.denumire, data.durata_ore),
+        )
+        nou = cur.fetchone()
+        conn.commit()
+        return nou

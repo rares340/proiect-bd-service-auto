@@ -29,24 +29,3 @@ def get_lucrari_catalog(conn=Depends(get_db)):
             "SELECT id_lucrare_catalog, denumire, durata_ore FROM lucrare_catalog ORDER BY denumire"
         )
         return cur.fetchall()
-
-
-@router.get("/piese")
-def get_piese(categorie: Optional[str] = None, conn=Depends(get_db)):
-    with conn.cursor() as cur:
-        if categorie:
-            cur.execute(
-                """
-                SELECT id_piesa, cod, denumire, categorie, pret_vanzare, stoc_curent
-                FROM piesa WHERE categorie = %s ORDER BY denumire
-                """,
-                (categorie,),
-            )
-        else:
-            cur.execute(
-                """
-                SELECT id_piesa, cod, denumire, categorie, pret_vanzare, stoc_curent
-                FROM piesa ORDER BY denumire
-                """
-            )
-        return cur.fetchall()
